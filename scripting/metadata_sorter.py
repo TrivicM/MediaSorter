@@ -1,5 +1,6 @@
 import os
 import sys
+import re
 import struct
 import ssl
 import json
@@ -105,6 +106,32 @@ def get_city_from_gps(lat, lon):
     GPS_CITY_CACHE[cache_key] = None
     return None
 
+def parse_date_from_filename(filename):
+    # Try WhatsApp format: "WhatsApp Image 2024-11-11 at 11.25.26.jpeg"
+    m = re.search(r'(20\d{2})[-_](\d{2})[-_](\d{2})\s+at\s+(\d{2})\.(\d{2})\.(\d{2})', filename, re.IGNORECASE)
+    if m:
+        return f"{m.group(1)}:{m.group(2)}:{m.group(3)} {m.group(4)}:{m.group(5)}:{m.group(6)}"
+        
+    # Try YYYY-MM-DD-HH-MM-SS or YYYY_MM_DD_HH_MM_SS
+    m = re.search(r'(20\d{2})[-_](\d{2})[-_](\d{2})[-_](\d{2})[-_](\d{2})[-_](\d{2})', filename)
+    if m:
+        return f"{m.group(1)}:{m.group(2)}:{m.group(3)} {m.group(4)}:{m.group(5)}:{m.group(6)}"
+
+    # Try YYYYMMDD_HHMMSS
+    m = re.search(r'(20\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})', filename)
+    if m:
+        return f"{m.group(1)}:{m.group(2)}:{m.group(3)} {m.group(4)}:{m.group(5)}:{m.group(6)}"
+
+    # Try YYMMDD_HHMMSS (6 digits _ 6 digits, e.g. 151230_133136)
+    m = re.search(r'(?<!\d)(\d{2})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})(?!\d)', filename)
+    if m:
+        yy = int(m.group(1))
+        # Guess century: if yy >= 70, assume 19yy, else 20yy
+        century = "19" if yy >= 70 else "20"
+        return f"{century}{m.group(1)}:{m.group(2)}:{m.group(3)} {m.group(4)}:{m.group(5)}:{m.group(6)}"
+
+    return None
+
 def get_image_metadata(filepath):
     info = {
         "Type": "Image",
@@ -125,25 +152,95 @@ def get_image_metadata(filepath):
             info["Width"], info["Height"] = img.size
             
             exif = img.getexif()
+            
+            # --- DATE EXTRACTION ---
+            date_found = None
+            
+            def is_valid_exif_date(d_str):
+                if not d_str or not isinstance(d_str, str):
+                    return False
+                d_str = d_str.strip()
+                if len(d_str) < 10 or d_str.startswith("0000:00:00"):
+                    return False
+                return True
+
+            # 1. Check Standard sub-IFD (0x8769) for DateTimeOriginal (36867), DateTimeDigitized (36868), DateTime (306)
+            for tag_val in (36867, 36868, 306):
+                try:
+                    exif_ifd = exif.get_ifd(0x8769) if exif else None
+                    if exif_ifd and tag_val in exif_ifd:
+                        val = exif_ifd[tag_val]
+                        if is_valid_exif_date(val):
+                            date_found = val.strip()
+                            break
+                except Exception:
+                    pass
+                
+                # Check main EXIF
+                try:
+                    if exif and tag_val in exif:
+                        val = exif[tag_val]
+                        if is_valid_exif_date(val):
+                            date_found = val.strip()
+                            break
+                except Exception:
+                    pass
+            
+            # 2. Check main EXIF dict keys loop as fallback
+            if not date_found and exif:
+                for tag_id, value in exif.items():
+                    tag = TAGS.get(tag_id, tag_id)
+                    if tag in ("DateTimeOriginal", "DateTimeDigitized", "DateTime"):
+                        if is_valid_exif_date(value):
+                            date_found = value.strip()
+                            break
+                            
+            # 3. Check GPS DateStamp / TimeStamp in GPS IFD (0x8825)
+            if not date_found:
+                try:
+                    gps_ifd = exif.get_ifd(0x8825) if exif else None
+                    if gps_ifd:
+                        date_stamp = gps_ifd.get(29) # GPSDateStamp, string "YYYY:MM:DD"
+                        time_stamp = gps_ifd.get(7)  # GPSTimeStamp, tuple of rationals
+                        if date_stamp and time_stamp:
+                            # Convert time_stamp components to integers
+                            h = int(time_stamp[0][0] / time_stamp[0][1]) if hasattr(time_stamp[0], '__len__') else int(time_stamp[0])
+                            m = int(time_stamp[1][0] / time_stamp[1][1]) if hasattr(time_stamp[1], '__len__') else int(time_stamp[1])
+                            s = int(time_stamp[2][0] / time_stamp[2][1]) if hasattr(time_stamp[2], '__len__') else int(time_stamp[2])
+                            date_stamp_clean = date_stamp.replace("-", ":")
+                            date_found = f"{date_stamp_clean} {h:02d}:{m:02d}:{s:02d}"
+                except Exception:
+                    pass
+                    
+            # 4. Check Filename Regex
+            if not date_found:
+                filename = os.path.basename(filepath)
+                parsed_filename_date = parse_date_from_filename(filename)
+                if parsed_filename_date:
+                    date_found = parsed_filename_date
+                    
+            # 5. Check Filesystem Fallback (ctime / mtime minimum)
+            if not date_found:
+                try:
+                    stat = os.stat(filepath)
+                    ctime = stat.st_ctime
+                    mtime = stat.st_mtime
+                    earliest_time = min(ctime, mtime)
+                    date_found = datetime.fromtimestamp(earliest_time).strftime("%Y:%m:%d %H:%M:%S") + " (file system)"
+                except Exception:
+                    pass
+                    
+            info["Date Taken"] = date_found if date_found else "Unknown"
+            
+            # --- OTHER EXIF METADATA ---
             if exif:
                 for tag_id, value in exif.items():
                     tag = TAGS.get(tag_id, tag_id)
-                    if tag == "DateTimeOriginal" or tag == "DateTime":
-                        info["Date Taken"] = value
-                    elif tag == "Make":
+                    if tag == "Make":
                         info["Camera Make"] = value.strip() if isinstance(value, str) else value
                     elif tag == "Model":
                         info["Camera Model"] = value.strip() if isinstance(value, str) else value
             
-            # Exif tags are sometimes in standard sub-IFD
-            try:
-                exif_ifd = exif.get_ifd(0x8769)
-                if exif_ifd:
-                    if 36867 in exif_ifd:
-                        info["Date Taken"] = exif_ifd[36867]
-            except Exception:
-                pass
-                
             # GPS tag is 0x8825
             try:
                 gps_ifd = exif.get_ifd(0x8825)
@@ -289,7 +386,7 @@ def get_file_datetime(meta):
     
     if meta["Type"] == "Image":
         val = meta.get("Date Taken")
-        if val and val != "Unknown":
+        if val and val != "Unknown" and not val.endswith(" (file system)"):
             date_str = val
             date_format = "%Y:%m:%d %H:%M:%S"
     elif meta["Type"] == "Video":
