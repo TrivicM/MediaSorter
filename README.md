@@ -9,19 +9,27 @@ Sorting of images and videos, renaming, geolocation, copy, duplicate removal.
 1. **Pre-Execution Analysis Phase:**
    * Scans all files and displays detailed file information (Dimensions, Format, Date Taken/Created, Camera Model, GPS location, and proposed new name).
    * Resolves GPS coordinates to city names (e.g., *Berlin*, *Rostock*, *København*) using the Nominatim OpenStreetMap API.
-   * Calculates SHA-256 hashes to identify and skip duplicate files (duplicates are never copied or modified).
+   * Calculates SHA-256 hashes to identify and classify duplicate files.
    * Displays analysis summaries and prompts you for confirmation before making any changes.
 
-2. **Smart Sorting & Rename Logic:**
-   * **Images with Timestamps:** Named using `YYMMDD_HHMMSS_City.ext` and copied to `Sorted/YYYYMM/`.
-   * **Images/Videos without Timestamps (Folder Majority):** Placed in the folder where the majority of other files from the same parent folder were sorted. If no sorted files exist in that parent folder, it falls back to the global folder majority, or `unknown` as a final fallback.
-   * **Duplicate Files:** Retained untouched in their original locations and skipped during copying to prevent clutter in the `Sorted` folder.
+2. **Custom Folder Structuring Options:**
+   Choose how the destination folders are structured:
+   * **Option 1:** Sort by Year & Month (e.g., `Sorted/202412/`) [Default]
+   * **Option 2:** Sort by Year (e.g., `Sorted/2024/`)
+   * **Option 3:** Sort by Year, Month, and Location (e.g., `Sorted/202412_Berlin/`)
+   * **Option 4:** Sort by Year and Location (e.g., `Sorted/2024_Berlin/`)
+   * **Option 5:** Sort by Location only (e.g., `Sorted/Berlin/`)
 
-3. **Safe Operation (Non-Destructive):**
-   * The script **never** moves, edits, or deletes your original source files. All operations are safe copy actions into the designated `Sorted` folder.
+3. **Renaming & Duplicate Copy Toggles:**
+   * **Renaming Toggle:** Choose to rename files to a standardized format (`YYMMDD_HHMMSS_City.ext`) or preserve their original filenames.
+   * **Duplicates Handling:** Choose to **Skip duplicates** (exclude identical files from copying) or **Keep duplicates** (copy duplicates and resolve filename collisions automatically by appending numeric suffixes like `_1`).
+   * **Fallback Folder Majority:** If metadata required for your sorting option is missing (e.g., location is missing under Option 3/4/5), the file will automatically sort into the target folder used by the majority of its neighboring files.
 
-4. **JSON Execution Summary:**
-   * Generates a detailed execution report at `Sorted/summary.json` mapping every processed file, its extracted metadata, rename details, duplicates found, and final sort destinations.
+4. **Safe Operation (Non-Destructive):**
+   * The script **never** moves, edits, or deletes your original source files. All operations are safe copy actions into the designated `Sorted` folder. Target directory name collisions are resolved automatically using unique suffixes to prevent overwrites.
+
+5. **JSON Execution Summary:**
+   * Generates a detailed execution report at `Sorted/summary.json` mapping every processed file, its extracted metadata, rename and duplicate choices, and final sort destinations.
 
 ---
 
