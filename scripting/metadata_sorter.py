@@ -772,6 +772,7 @@ def scan_directory(directory, results_dir=None):
     copied_images_size = 0
     copied_videos_count = 0
     copied_videos_size = 0
+    files_renamed = 0  # Reset counter to track actual renames during execution
 
     # Second Pass: Process files with timestamps
     if unique_with_ts:
@@ -806,6 +807,10 @@ def scan_directory(directory, results_dir=None):
                 
                 shutil.copy2(filepath, dest_filepath)
                 files_copied += 1
+                
+                # Update files renamed count if the final name in destination is different from original
+                if dest_unique_name.lower() != file_data["file"].lower():
+                    files_renamed += 1
                 
                 # Update processed statistics
                 if ext in IMAGE_EXTENSIONS:
@@ -866,6 +871,10 @@ def scan_directory(directory, results_dir=None):
                 shutil.copy2(filepath, dest_filepath)
                 rel_dest_print = os.path.join("Sorted", majority_folder, dest_unique_name)
                 files_copied += 1
+                
+                # Update files renamed count if the final name in destination is different from original
+                if dest_unique_name.lower() != file_data["file"].lower():
+                    files_renamed += 1
                 
                 # Update processed statistics
                 if ext in IMAGE_EXTENSIONS:
