@@ -706,6 +706,11 @@
             to { opacity: 1; }
         }
 
+        select#opt-structure option, select#opt-duplicate option {
+            background-color: #0c0f1d;
+            color: var(--text-primary);
+        }
+
         @keyframes pulseSuccess {
             0% { border-color: rgba(16, 185, 129, 0.6); }
             50% { border-color: rgba(16, 185, 129, 1); box-shadow: 0 0 10px rgba(16, 185, 129, 0.1); }
@@ -755,7 +760,7 @@
                 <label class="form-label">Sorting Configurations</label>
                 <div class="options-grid">
                     <div class="option-card">
-                        <input type="checkbox" id="opt-rename" checked disabled>
+                        <input type="checkbox" id="opt-rename" checked>
                         <label for="opt-rename">
                             Rename Files
                             <span>Standardizes names to YYMMDD_HHMMSS format</span>
@@ -767,6 +772,43 @@
                             Copy Sorted
                             <span>Preserves source files and makes a copy in 'Sorted'</span>
                         </label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Folder Structure Option Dropdown -->
+            <div class="form-group">
+                <label class="form-label">Folder Structure Option</label>
+                <div style="position: relative; display: flex; align-items: center; width: 100%;">
+                    <select id="opt-structure" class="path-input" style="width: 100%; appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 45px; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--glass-border); border-radius: 16px; font-size: 0.95rem; color: var(--text-primary); outline: none;">
+                        <option value="1">Option 1 - Year & Month (e.g. 202412)</option>
+                        <option value="2">Option 2 - Year only (e.g. 2024)</option>
+                        <option value="3">Option 3 - Year, Month & Location (e.g. 202412_Berlin)</option>
+                        <option value="4">Option 4 - Year & Location (e.g. 2024_Berlin)</option>
+                        <option value="5">Option 5 - Location only (e.g. Berlin)</option>
+                    </select>
+                    <!-- Custom Arrow Indicator -->
+                    <div style="position: absolute; right: 20px; pointer-events: none; display: flex; align-items: center; color: var(--text-secondary);">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Duplicates Handling Dropdown -->
+            <div class="form-group">
+                <label class="form-label">Duplicates Handling</label>
+                <div style="position: relative; display: flex; align-items: center; width: 100%;">
+                    <select id="opt-duplicate" class="path-input" style="width: 100%; appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 45px; background: rgba(0, 0, 0, 0.25); border: 1px solid var(--glass-border); border-radius: 16px; font-size: 0.95rem; color: var(--text-primary); outline: none;">
+                        <option value="1">Skip duplicates (do not copy) [Default]</option>
+                        <option value="2">Keep duplicates (copy with suffix e.g., _1)</option>
+                    </select>
+                    <!-- Custom Arrow Indicator -->
+                    <div style="position: absolute; right: 20px; pointer-events: none; display: flex; align-items: center; color: var(--text-secondary);">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="6 9 12 15 18 9"></polyline>
+                        </svg>
                     </div>
                 </div>
             </div>
@@ -950,10 +992,25 @@
             document.getElementById('console-log').innerHTML = '';
 
             try {
+                const optionSelect = document.getElementById('opt-structure');
+                const selectedOption = optionSelect ? parseInt(optionSelect.value) : 1;
+
+                const renameCheckbox = document.getElementById('opt-rename');
+                const renameEnabled = renameCheckbox ? renameCheckbox.checked : true;
+
+                const duplicateSelect = document.getElementById('opt-duplicate');
+                const duplicateOpt = duplicateSelect ? parseInt(duplicateSelect.value) : 1;
+
                 const response = await fetch('/api/analyze', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ source: paths.source, destination: paths.dest })
+                    body: JSON.stringify({ 
+                        source: paths.source, 
+                        destination: paths.dest,
+                        option: selectedOption,
+                        rename: renameEnabled,
+                        duplicate_opt: duplicateOpt
+                    })
                 });
 
                 if (response.ok) {

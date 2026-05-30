@@ -488,7 +488,43 @@ def print_progress(current, total, bar_length=30):
     sys.stdout.write(f"\rProgress: [{bar}] {percent:.1f}% ({current}/{total} files)")
     sys.stdout.flush()
 
-def scan_directory(directory, results_dir=None):
+def scan_directory(directory, results_dir=None, option=None, rename=None, duplicate_opt=None):
+    if option is None:
+        print("Please choose a folder structuring option:")
+        print("  1. Sort by Year + Month (e.g., 202412) [Default]")
+        print("  2. Sort by Year (e.g., 2024)")
+        print("  3. Sort by Year + Month + Location (e.g., 202412_Berlin)")
+        print("  4. Sort by Year + Location (e.g., 2024_Berlin)")
+        print("  5. Sort by Location only (e.g., Berlin)")
+        try:
+            choice = input("Enter option (1-5): ").strip()
+            if choice in ("1", "2", "3", "4", "5"):
+                option = int(choice)
+            else:
+                option = 1
+        except Exception:
+            option = 1
+
+    if rename is None:
+        try:
+            choice = input("Do you want to rename the files to standardized format? (Y/n): ").strip().lower()
+            rename = choice not in ('n', 'no')
+        except Exception:
+            rename = True
+
+    if duplicate_opt is None:
+        print("Choose duplicates handling:")
+        print("  1. Skip duplicates (do not copy) [Default]")
+        print("  2. Keep duplicates (copy with suffix)")
+        try:
+            choice = input("Enter option (1-2): ").strip()
+            if choice == "2":
+                duplicate_opt = 2
+            else:
+                duplicate_opt = 1
+        except Exception:
+            duplicate_opt = 1
+
     # Find the Sorted folder (same level as selected folder if not specified)
     if not results_dir:
         parent_dir = os.path.dirname(directory)
@@ -540,6 +576,12 @@ def scan_directory(directory, results_dir=None):
     unique_with_ts = []
     unique_without_ts = []
     
+    # Metadata report counters (computed on the fly)
+    both_ts_and_loc = 0
+    only_ts = 0
+    only_loc = 0
+    neither_ts_nor_loc = 0
+    
     # Track destinations chosen for each folder path: folder_path -> list of destination folder names (e.g. "201512")
     folder_destinations = {}
     
@@ -590,8 +632,10 @@ def scan_directory(directory, results_dir=None):
         
         # --- DUPLICATE DETECTION ---
         file_hash = get_file_hash(filepath)
+        is_duplicate = False
         if file_hash:
             if file_hash in seen_hashes:
+                is_duplicate = True
                 duplicates_found += 1
                 original_rel_path = seen_hashes[file_hash]
                 
@@ -606,7 +650,11 @@ def scan_directory(directory, results_dir=None):
                 except UnicodeEncodeError:
                     safe_original_rel_path = original_rel_path.encode('ascii', errors='replace').decode('ascii')
                     print(f"  Duplicate of:  {safe_original_rel_path}")
-                    
+            else:
+                seen_hashes[file_hash] = rel_path
+
+        if is_duplicate:
+            if duplicate_opt == 1:
                 file_log_entries[filepath]["duplicate_details"] = {
                     "is_duplicate": True,
                     "duplicate_of": original_rel_path,
@@ -614,7 +662,11 @@ def scan_directory(directory, results_dir=None):
                 }
                 continue
             else:
-                seen_hashes[file_hash] = rel_path
+                file_log_entries[filepath]["duplicate_details"] = {
+                    "is_duplicate": True,
+                    "duplicate_of": original_rel_path,
+                    "status": "Kept (Duplicate)"
+                }
         
         total_size += size
         
@@ -637,16 +689,20 @@ def scan_directory(directory, results_dir=None):
             print(f"\n({idx}/{total_files_to_process}) {safe_rel_path}")
             
         # Get proposed filename (this might print geocoding status for city reversed from GPS coordinates)
-        proposed = get_proposed_filename(filepath, meta, ext)
         unique_name = file
         rename_status = "No rename proposed"
-        if proposed:
-            unique_name = get_unique_filepath(root, file, proposed)
-            if unique_name.lower() != file.lower():
-                files_renamed += 1
-                rename_status = "Renamed"
-            else:
-                rename_status = "Already formatted"
+        proposed = None
+        if rename:
+            proposed = get_proposed_filename(filepath, meta, ext)
+            if proposed:
+                unique_name = get_unique_filepath(root, file, proposed)
+                if unique_name.lower() != file.lower():
+                    files_renamed += 1
+                    rename_status = "Renamed"
+                else:
+                    rename_status = "Already formatted"
+        else:
+            rename_status = "Rename disabled"
                 
         # Print metadata details in analysis phase
         if not meta.get("Error"):
@@ -702,8 +758,38 @@ def scan_directory(directory, results_dir=None):
             "status": rename_status
         }
         
+        dt = None
+        has_location = False
         if not meta.get("Error"):
             dt = get_file_datetime(meta)
+            lat = meta.get("GPS_Lat")
+            lon = meta.get("GPS_Lon")
+            if lat is not None and lon is not None:
+                city = get_city_from_gps(lat, lon)
+                if city:
+                    has_location = True
+
+        # Update metadata report counters
+        has_ts = (dt is not None)
+        if has_ts and has_location:
+            both_ts_and_loc += 1
+        elif has_ts:
+            only_ts += 1
+        elif has_location:
+            only_loc += 1
+        else:
+            neither_ts_nor_loc += 1
+
+        # Check if directly sortable based on chosen option
+        is_direct = False
+        if option in (1, 2):
+            is_direct = has_ts
+        elif option in (3, 4):
+            is_direct = (has_ts and has_location)
+        elif option == 5:
+            is_direct = has_location
+
+        if not meta.get("Error"):
             file_data = {
                 "root": root, "file": file, "meta": meta, "file_hash": file_hash,
                 "size": size, "ext": ext, "filepath": filepath, "unique_name": unique_name,
@@ -711,11 +797,12 @@ def scan_directory(directory, results_dir=None):
             }
             if dt:
                 file_data["datetime"] = dt
+            
+            if is_direct:
                 unique_with_ts.append(file_data)
             else:
                 unique_without_ts.append(file_data)
         else:
-            # If metadata extraction failed, classify as without timestamp
             file_data = {
                 "root": root, "file": file, "meta": {"Type": "Image" if ext in IMAGE_EXTENSIONS else "Video", "Error": "Failed to parse metadata"},
                 "file_hash": file_hash, "size": size, "ext": ext, "filepath": filepath,
@@ -724,30 +811,7 @@ def scan_directory(directory, results_dir=None):
             unique_without_ts.append(file_data)
             
     # Perform Metadata Analysis and display results
-    both_ts_and_loc = 0
-    only_ts = 0
-    only_loc = 0
-    neither_ts_nor_loc = 0
-    
-    for file_data in unique_with_ts:
-        meta = file_data["meta"]
-        lat = meta.get("GPS_Lat")
-        lon = meta.get("GPS_Lon")
-        has_loc = (lat is not None and lon is not None)
-        if has_loc:
-            both_ts_and_loc += 1
-        else:
-            only_ts += 1
-            
-    for file_data in unique_without_ts:
-        meta = file_data["meta"]
-        lat = meta.get("GPS_Lat")
-        lon = meta.get("GPS_Lon")
-        has_loc = (lat is not None and lon is not None)
-        if has_loc:
-            only_loc += 1
-        else:
-            neither_ts_nor_loc += 1
+    other_files_count = stats_before['other_count']
             
     other_files_count = stats_before['other_count']
     
@@ -774,23 +838,43 @@ def scan_directory(directory, results_dir=None):
     copied_videos_size = 0
     files_renamed = 0  # Reset counter to track actual renames during execution
 
-    # Second Pass: Process files with timestamps
+    # Second Pass: Process directly sortable files
     if unique_with_ts:
         print("\n" + "=" * 80)
-        print("PROCESSING FILES WITH TIMESTAMPS...")
+        print("PROCESSING DIRECTLY SORTABLE FILES...")
         print("=" * 80)
         
         for i, file_data in enumerate(unique_with_ts, 1):
             copied_index += 1
             root = file_data["root"]
             filepath = file_data["filepath"]
-            dt = file_data["datetime"]
+            dt = file_data.get("datetime")
             unique_name = file_data["unique_name"]
             ext = file_data["ext"]
             size = file_data.get("size", 0)
             
             # Copy / Sort logic
-            folder_name = dt.strftime("%Y%m")
+            folder_name = ""
+            meta = file_data.get("meta", {})
+            lat = meta.get("GPS_Lat")
+            lon = meta.get("GPS_Lon")
+            city = None
+            if lat is not None and lon is not None:
+                fetched_city = get_city_from_gps(lat, lon)
+                if fetched_city:
+                    city = fetched_city.replace(" ", "_")
+
+            if option == 1:
+                folder_name = dt.strftime("%Y%m")
+            elif option == 2:
+                folder_name = dt.strftime("%Y")
+            elif option == 3:
+                folder_name = f"{dt.strftime('%Y%m')}_{city}"
+            elif option == 4:
+                folder_name = f"{dt.strftime('%Y')}_{city}"
+            elif option == 5:
+                folder_name = city
+
             final_name = unique_name
             dest_folder = os.path.join(results_dir, folder_name)
             
@@ -802,7 +886,7 @@ def scan_directory(directory, results_dir=None):
             
             try:
                 os.makedirs(dest_folder, exist_ok=True)
-                dest_unique_name = get_unique_filepath(dest_folder, final_name, final_name)
+                dest_unique_name = get_unique_filepath(dest_folder, "", final_name)
                 dest_filepath = os.path.join(dest_folder, dest_unique_name)
                 
                 shutil.copy2(filepath, dest_filepath)
@@ -830,10 +914,10 @@ def scan_directory(directory, results_dir=None):
                 
             print_progress(copied_index, total_to_copy)
 
-    # Third Pass: Process files without timestamps using parent folder majority destinations
+    # Third Pass: Process fallback files using parent folder majority destinations
     if unique_without_ts:
         print("\n" + "=" * 80)
-        print("PROCESSING FILES WITHOUT TIMESTAMPS (Using folder majority)...")
+        print("PROCESSING FALLBACK FILES (Using folder majority)...")
         print("=" * 80)
         
         # Build global fallback majority in case some parent folder has no files with timestamps
@@ -865,7 +949,7 @@ def scan_directory(directory, results_dir=None):
             
             try:
                 os.makedirs(dest_folder, exist_ok=True)
-                dest_unique_name = get_unique_filepath(dest_folder, final_name, final_name)
+                dest_unique_name = get_unique_filepath(dest_folder, "", final_name)
                 dest_filepath = os.path.join(dest_folder, dest_unique_name)
                 
                 shutil.copy2(filepath, dest_filepath)
@@ -931,9 +1015,11 @@ def scan_directory(directory, results_dir=None):
             "total": { "count": total_files_before, "size_bytes": total_size_before, "size_formatted": format_size(total_size_before) }
         },
         "execution_actions": {
-            "rename_enabled": True,
+            "rename_enabled": rename,
             "delete_duplicates_enabled": False,
-            "copy_sorted_enabled": True
+            "copy_sorted_enabled": True,
+            "sorting_option": option,
+            "duplicate_handling": "skip" if duplicate_opt == 1 else "keep"
         },
         "execution_results": {
             "files_renamed": files_renamed,

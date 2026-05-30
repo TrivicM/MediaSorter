@@ -31,6 +31,9 @@ class AppState:
         self.status = "idle"  # idle, analyzing, confirming, copying, completed, error
         self.source = ""
         self.destination = ""
+        self.option = 1  # Folder sorting option (1-5)
+        self.rename = True
+        self.duplicate_opt = 1  # 1 = Skip, 2 = Keep
         self.logs = []
         self.progress_current = 0
         self.progress_total = 0
@@ -136,13 +139,19 @@ def reset_status():
 class AnalyzeRequest(BaseModel):
     source: str
     destination: str
+    option: int = 1
+    rename: bool = True
+    duplicate_opt: int = 1
 
-def analysis_task_thread(source: str, destination: str):
+def analysis_task_thread(source: str, destination: str, option: int = 1, rename: bool = True, duplicate_opt: int = 1):
     sys.stdout = LogRedirector(original_stdout)
     try:
         state.status = "analyzing"
         state.source = source
         state.destination = destination
+        state.option = option
+        state.rename = rename
+        state.duplicate_opt = duplicate_opt
         state.logs = []
         state.progress_current = 0
         state.progress_percent = 0
@@ -176,6 +185,12 @@ def analysis_task_thread(source: str, destination: str):
         state.folder_destinations = {}
         state.duplicates_found = 0
         seen_hashes = {}
+        
+        # Metadata report counters (computed on the fly)
+        both_ts_and_loc = 0
+        only_ts = 0
+        only_loc = 0
+        neither_ts_nor_loc = 0
         
         log_message("Analyzing files and metadata...")
         
@@ -218,10 +233,17 @@ def analysis_task_thread(source: str, destination: str):
             
             # Duplicate check
             file_hash = metadata_sorter.get_file_hash(filepath)
+            is_duplicate = False
             if file_hash:
                 if file_hash in seen_hashes:
+                    is_duplicate = True
                     state.duplicates_found += 1
                     original_rel_path = seen_hashes[file_hash]
+                else:
+                    seen_hashes[file_hash] = rel_path
+                    
+            if is_duplicate:
+                if state.duplicate_opt == 1:
                     state.file_log_entries[filepath]["duplicate_details"] = {
                         "is_duplicate": True,
                         "duplicate_of": original_rel_path,
@@ -230,8 +252,13 @@ def analysis_task_thread(source: str, destination: str):
                     log_message(f"Skipped duplicate: {rel_path} (identical to {original_rel_path})")
                     continue
                 else:
-                    seen_hashes[file_hash] = rel_path
-                    
+                    state.file_log_entries[filepath]["duplicate_details"] = {
+                        "is_duplicate": True,
+                        "duplicate_of": original_rel_path,
+                        "status": "Kept (Duplicate)"
+                    }
+                    log_message(f"Kept duplicate: {rel_path} (identical to {original_rel_path})")
+
             # Extract metadata
             meta = None
             if ext in metadata_sorter.IMAGE_EXTENSIONS:
@@ -242,15 +269,19 @@ def analysis_task_thread(source: str, destination: str):
             if meta is None:
                 meta = {"Type": "Image" if ext in metadata_sorter.IMAGE_EXTENSIONS else "Video", "Error": "Failed to parse metadata"}
                 
-            proposed = metadata_sorter.get_proposed_filename(filepath, meta, ext)
             unique_name = file
             rename_status = "No rename proposed"
-            if proposed:
-                unique_name = metadata_sorter.get_unique_filepath(root, file, proposed)
-                if unique_name.lower() != file.lower():
-                    rename_status = "Renamed"
-                else:
-                    rename_status = "Already formatted"
+            proposed = None
+            if state.rename:
+                proposed = metadata_sorter.get_proposed_filename(filepath, meta, ext)
+                if proposed:
+                    unique_name = metadata_sorter.get_unique_filepath(root, file, proposed)
+                    if unique_name.lower() != file.lower():
+                        rename_status = "Renamed"
+                    else:
+                        rename_status = "Already formatted"
+            else:
+                rename_status = "Rename disabled"
                     
             # Populate logs
             meta_log = {
@@ -281,8 +312,38 @@ def analysis_task_thread(source: str, destination: str):
                 "status": rename_status
             }
             
+            dt = None
+            has_location = False
             if not meta.get("Error"):
                 dt = metadata_sorter.get_file_datetime(meta)
+                lat = meta.get("GPS_Lat")
+                lon = meta.get("GPS_Lon")
+                if lat is not None and lon is not None:
+                    city = metadata_sorter.get_city_from_gps(lat, lon)
+                    if city:
+                        has_location = True
+
+            # Update metadata report counters
+            has_ts = (dt is not None)
+            if has_ts and has_location:
+                both_ts_and_loc += 1
+            elif has_ts:
+                only_ts += 1
+            elif has_location:
+                only_loc += 1
+            else:
+                neither_ts_nor_loc += 1
+
+            # Check if directly sortable based on chosen option
+            is_direct = False
+            if state.option in (1, 2):
+                is_direct = has_ts
+            elif state.option in (3, 4):
+                is_direct = (has_ts and has_location)
+            elif state.option == 5:
+                is_direct = has_location
+
+            if not meta.get("Error"):
                 file_data = {
                     "root": root, "file": file, "meta": meta, "file_hash": file_hash,
                     "size": size, "ext": ext, "filepath": filepath, "unique_name": unique_name,
@@ -290,6 +351,8 @@ def analysis_task_thread(source: str, destination: str):
                 }
                 if dt:
                     file_data["datetime"] = dt
+                
+                if is_direct:
                     state.unique_with_ts.append(file_data)
                 else:
                     state.unique_without_ts.append(file_data)
@@ -300,32 +363,6 @@ def analysis_task_thread(source: str, destination: str):
                     "unique_name": unique_name, "rename_status": rename_status
                 }
                 state.unique_without_ts.append(file_data)
-
-        # Build analysis report stats
-        both_ts_and_loc = 0
-        only_ts = 0
-        only_loc = 0
-        neither_ts_nor_loc = 0
-        
-        for file_data in state.unique_with_ts:
-            meta = file_data["meta"]
-            lat = meta.get("GPS_Lat")
-            lon = meta.get("GPS_Lon")
-            has_loc = (lat is not None and lon is not None)
-            if has_loc:
-                both_ts_and_loc += 1
-            else:
-                only_ts += 1
-                
-        for file_data in state.unique_without_ts:
-            meta = file_data["meta"]
-            lat = meta.get("GPS_Lat")
-            lon = meta.get("GPS_Lon")
-            has_loc = (lat is not None and lon is not None)
-            if has_loc:
-                only_loc += 1
-            else:
-                neither_ts_nor_loc += 1
                 
         state.metadata_report = {
             "both_ts_and_loc": both_ts_and_loc,
@@ -351,7 +388,7 @@ def analyze_directory(request: AnalyzeRequest, background_tasks: BackgroundTasks
     if state.status not in ("idle", "completed", "error"):
         raise HTTPException(status_code=400, detail="An operation is already in progress.")
         
-    background_tasks.add_task(analysis_task_thread, request.source, request.destination)
+    background_tasks.add_task(analysis_task_thread, request.source, request.destination, request.option, request.rename, request.duplicate_opt)
     return {"status": "started"}
 
 def copy_task_thread():
@@ -376,9 +413,9 @@ def copy_task_thread():
         
         log_message(f"Starting copy and rename phase into: {actual_destination}")
         
-        # Second Pass: Process files with timestamps
+        # Second Pass: Process directly sortable files
         if state.unique_with_ts:
-            log_message("Copying files with valid timestamps...")
+            log_message("Copying directly sortable files...")
             for file_data in state.unique_with_ts:
                 if state.abort_requested:
                     log_message("Copy operation interrupted by user.")
@@ -391,12 +428,33 @@ def copy_task_thread():
                 
                 root = file_data["root"]
                 filepath = file_data["filepath"]
-                dt = file_data["datetime"]
+                dt = file_data.get("datetime")
                 unique_name = file_data["unique_name"]
                 ext = file_data["ext"]
                 size = file_data.get("size", 0)
                 
-                folder_name = dt.strftime("%Y%m")
+                # Copy / Sort logic
+                folder_name = ""
+                meta = file_data.get("meta", {})
+                lat = meta.get("GPS_Lat")
+                lon = meta.get("GPS_Lon")
+                city = None
+                if lat is not None and lon is not None:
+                    fetched_city = metadata_sorter.get_city_from_gps(lat, lon)
+                    if fetched_city:
+                        city = fetched_city.replace(" ", "_")
+
+                if state.option == 1:
+                    folder_name = dt.strftime("%Y%m")
+                elif state.option == 2:
+                    folder_name = dt.strftime("%Y")
+                elif state.option == 3:
+                    folder_name = f"{dt.strftime('%Y%m')}_{city}"
+                elif state.option == 4:
+                    folder_name = f"{dt.strftime('%Y')}_{city}"
+                elif state.option == 5:
+                    folder_name = city
+
                 final_name = unique_name
                 dest_folder = os.path.join(actual_destination, folder_name)
                 
@@ -407,7 +465,7 @@ def copy_task_thread():
                 
                 try:
                     os.makedirs(dest_folder, exist_ok=True)
-                    dest_unique_name = metadata_sorter.get_unique_filepath(dest_folder, final_name, final_name)
+                    dest_unique_name = metadata_sorter.get_unique_filepath(dest_folder, "", final_name)
                     dest_filepath = os.path.join(dest_folder, dest_unique_name)
                     
                     import shutil
@@ -433,9 +491,9 @@ def copy_task_thread():
                 except Exception as e:
                     log_message(f"Error copying {filepath}: {e}")
                     
-        # Third Pass: Process files without timestamps using parent folder majority destinations
+        # Third Pass: Process fallback files using parent folder majority destinations
         if state.unique_without_ts and not state.abort_requested:
-            log_message("Copying files without timestamps (folder majority)...")
+            log_message("Copying fallback files (folder majority)...")
             
             all_dests = []
             for dests in state.folder_destinations.values():
@@ -472,7 +530,7 @@ def copy_task_thread():
                 
                 try:
                     os.makedirs(dest_folder, exist_ok=True)
-                    dest_unique_name = metadata_sorter.get_unique_filepath(dest_folder, final_name, final_name)
+                    dest_unique_name = metadata_sorter.get_unique_filepath(dest_folder, "", final_name)
                     dest_filepath = os.path.join(dest_folder, dest_unique_name)
                     
                     import shutil
@@ -524,6 +582,13 @@ def copy_task_thread():
                     "size_bytes": state.stats_before['img_size'] + state.stats_before['vid_size'] + state.stats_before['other_size'], 
                     "size_formatted": metadata_sorter.format_size(state.stats_before['img_size'] + state.stats_before['vid_size'] + state.stats_before['other_size']) 
                 }
+            },
+            "execution_actions": {
+                "rename_enabled": state.rename,
+                "delete_duplicates_enabled": False,
+                "copy_sorted_enabled": True,
+                "sorting_option": state.option,
+                "duplicate_handling": "skip" if state.duplicate_opt == 1 else "keep"
             },
             "execution_results": {
                 "files_renamed": state.files_renamed,
