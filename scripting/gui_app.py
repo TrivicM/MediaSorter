@@ -36,6 +36,7 @@ class AppState:
         self.progress_total = 0
         self.progress_percent = 0
         self.error_message = ""
+        self.abort_requested = False  # Flag to track if user wants to interrupt copying
         
         # Pre-execution statistics
         self.stats_before = {}
@@ -363,20 +364,27 @@ def copy_task_thread():
         state.copied_images_size = 0
         state.copied_videos_count = 0
         state.copied_videos_size = 0
+        copied_index = 0
         
         total_to_copy = len(state.unique_with_ts) + len(state.unique_without_ts)
         state.progress_total = total_to_copy
         state.progress_current = 0
         state.progress_percent = 0
         
-        copied_index = 0
+        # Ensure destination folder is results_dir / "Sorted"
+        actual_destination = os.path.join(state.destination, "Sorted")
         
-        log_message("Starting copy and rename phase...")
+        log_message(f"Starting copy and rename phase into: {actual_destination}")
         
         # Second Pass: Process files with timestamps
         if state.unique_with_ts:
             log_message("Copying files with valid timestamps...")
             for file_data in state.unique_with_ts:
+                if state.abort_requested:
+                    log_message("Copy operation interrupted by user.")
+                    state.status = "completed"
+                    break
+                
                 copied_index += 1
                 state.progress_current = copied_index
                 state.progress_percent = int((copied_index / total_to_copy) * 100)
@@ -390,7 +398,7 @@ def copy_task_thread():
                 
                 folder_name = dt.strftime("%Y%m")
                 final_name = unique_name
-                dest_folder = os.path.join(state.destination, folder_name)
+                dest_folder = os.path.join(actual_destination, folder_name)
                 
                 parent_path = os.path.abspath(root)
                 if parent_path not in state.folder_destinations:
@@ -405,6 +413,7 @@ def copy_task_thread():
                     import shutil
                     shutil.copy2(filepath, dest_filepath)
                     state.files_copied += 1
+                    time.sleep(0.1)
                     
                     if dest_unique_name.lower() != file_data["file"].lower():
                         state.files_renamed += 1
@@ -425,7 +434,7 @@ def copy_task_thread():
                     log_message(f"Error copying {filepath}: {e}")
                     
         # Third Pass: Process files without timestamps using parent folder majority destinations
-        if state.unique_without_ts:
+        if state.unique_without_ts and not state.abort_requested:
             log_message("Copying files without timestamps (folder majority)...")
             
             all_dests = []
@@ -434,6 +443,11 @@ def copy_task_thread():
             global_majority = Counter(all_dests).most_common(1)[0][0] if all_dests else "unknown"
             
             for file_data in state.unique_without_ts:
+                if state.abort_requested:
+                    log_message("Copy operation interrupted by user.")
+                    state.status = "completed"
+                    break
+                
                 copied_index += 1
                 state.progress_current = copied_index
                 state.progress_percent = int((copied_index / total_to_copy) * 100)
@@ -453,7 +467,7 @@ def copy_task_thread():
                 else:
                     majority_folder = global_majority
                     
-                dest_folder = os.path.join(state.destination, majority_folder)
+                dest_folder = os.path.join(actual_destination, majority_folder)
                 final_name = unique_name
                 
                 try:
@@ -464,6 +478,7 @@ def copy_task_thread():
                     import shutil
                     shutil.copy2(filepath, dest_filepath)
                     state.files_copied += 1
+                    time.sleep(0.1)
                     
                     if dest_unique_name.lower() != file_data["file"].lower():
                         state.files_renamed += 1
@@ -499,7 +514,7 @@ def copy_task_thread():
         summary_data = {
             "timestamp": datetime.now().isoformat(),
             "selected_directory": state.source,
-            "results_directory": state.destination,
+            "results_directory": actual_destination,
             "initial_summary": {
                 "images": { "count": state.stats_before['img_count'], "size_bytes": state.stats_before['img_size'], "size_formatted": metadata_sorter.format_size(state.stats_before['img_size']) },
                 "videos": { "count": state.stats_before['vid_count'], "size_bytes": state.stats_before['vid_size'], "size_formatted": metadata_sorter.format_size(state.stats_before['vid_size']) },
@@ -529,14 +544,17 @@ def copy_task_thread():
             "processed_files": list(state.file_log_entries.values())
         }
         
-        os.makedirs(state.destination, exist_ok=True)
-        json_path = os.path.join(state.destination, "summary.json")
+        os.makedirs(actual_destination, exist_ok=True)
+        json_path = os.path.join(actual_destination, "summary.json")
         import json
         with open(json_path, 'w', encoding='utf-8') as json_file:
             json.dump(summary_data, json_file, indent=2, ensure_ascii=False)
             
         log_message(f"Summary successfully written to: {json_path}")
-        log_message("Copy operation completed successfully!")
+        if state.abort_requested:
+            log_message("Copy operation stopped. Some files were copied.")
+        else:
+            log_message("Copy operation completed successfully!")
         state.status = "completed"
         
     except Exception as e:
@@ -565,18 +583,27 @@ def cancel_copy():
     state = AppState()
     return {"status": "cancelled"}
 
-@app.get("/api/gps-locations")
-def get_gps_locations(source: str):
+@app.post("/api/abort")
+def abort_copy():
+    """Interrupts/aborts the copy operation while it is running."""
+    if state.status != "copying":
+        raise HTTPException(status_code=400, detail="No active copy process to abort.")
+    state.abort_requested = True
+    log_message("Abort request received. Stopping copy process...")
+    return {"status": "aborting"}
+
+@app.get("/api/gps-clusters")
+def get_gps_clusters(source: str):
     """
-    Recursively scans the directory and retrieves GPS coordinates from all media.
-    Does not reverse-geocode city details to keep performance fast.
+    Recursively scans the directory, retrieves GPS coordinates, and groups them
+    into spatial clusters representing cities/regions to avoid map lag.
     """
     if not source or not os.path.exists(source):
         raise HTTPException(status_code=400, detail="Source path does not exist.")
         
     locations = []
     
-    # Simple recursive file walk
+    # 1. Scan and extract all coordinates
     for root, dirs, files in os.walk(source):
         files = [f for f in files if not f.startswith('.')]
         for file in files:
@@ -595,8 +622,6 @@ def get_gps_locations(source: str):
                         "type": "image"
                     })
             elif ext in metadata_sorter.VIDEO_EXTENSIONS:
-                # Video Atom structure GPS extraction is generally complex and slow,
-                # but if we get video metadata let's see if it has GPS
                 meta = metadata_sorter.get_video_metadata(filepath)
                 if meta and meta.get("GPS_Lat") is not None and meta.get("GPS_Lon") is not None:
                     locations.append({
@@ -607,8 +632,38 @@ def get_gps_locations(source: str):
                         "date_taken": meta.get("Date Created", "Unknown"),
                         "type": "video"
                     })
-                    
-    return {"locations": locations}
+
+    # 2. Perform clustering (spatial proximity threshold: 0.15 degrees, approx 15-20km)
+    clusters = []
+    for loc in locations:
+        placed = False
+        for c in clusters:
+            lat_diff = abs(loc["lat"] - c["avg_lat"])
+            lon_diff = abs(loc["lon"] - c["avg_lon"])
+            if lat_diff < 0.15 and lon_diff < 0.15:
+                c["files"].append(loc)
+                # Recalculate average coordinates of cluster
+                c["avg_lat"] = sum(f["lat"] for f in c["files"]) / len(c["files"])
+                c["avg_lon"] = sum(f["lon"] for f in c["files"]) / len(c["files"])
+                placed = True
+                break
+        if not placed:
+            clusters.append({
+                "id": len(clusters),
+                "avg_lat": loc["lat"],
+                "avg_lon": loc["lon"],
+                "files": [loc]
+            })
+
+    # 3. Resolve city name for each cluster center using Nominatim
+    for c in clusters:
+        city = metadata_sorter.get_city_from_gps(c["avg_lat"], c["avg_lon"])
+        if not city:
+            city = f"Region near {c['avg_lat']:.2f}, {c['avg_lon']:.2f}"
+        c["city"] = city
+        c["count"] = len(c["files"])
+
+    return {"clusters": clusters}
 
 @app.get("/api/thumbnail")
 def get_thumbnail(path: str = Query(..., description="Absolute path to the media file")):
@@ -657,13 +712,14 @@ static_path = os.path.join(script_dir, "static")
 os.makedirs(static_path, exist_ok=True)
 app.mount("/static", StaticFiles(directory=static_path), name="static")
 
+port = int(os.environ.get("PORT", 8000))
 def open_browser():
     time.sleep(1.0)
-    webbrowser.open("http://127.0.0.1:8000")
+    webbrowser.open(f"http://127.0.0.1:{port}")
 
 if __name__ == "__main__":
     # Start web browser in background thread
     threading.Thread(target=open_browser, daemon=True).start()
     
     # Run server
-    uvicorn.run(app, host="127.0.0.1", port=8000)
+    uvicorn.run(app, host="127.0.0.1", port=port)
