@@ -1,6 +1,9 @@
-# ImgSorter
+# Media Metadata Sorter
 
 Sorting of images and videos, renaming, geolocation, copy, duplicate removal.
+
+![Media Metadata Sorter Dashboard](docs/gui_screenshot.png)
+![Photo GPS Map View](docs/GPS_screenshot.png)
 
 ---
 
