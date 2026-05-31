@@ -68,12 +68,19 @@ To run this project on a new computer:
 
 From the project root directory:
 
-* **Interactive mode (UI directory pickers):**
+* **Web GUI Dashboard (Recommended):**
+  Start the FastAPI local web application:
+  ```bash
+  python scripting/gui_app.py
+  ```
+  This launches a browser window showing the interactive dashboard and map view.
+
+* **CLI Mode (Terminal prompts):**
+  Run the command-line sorter:
   ```bash
   python scripting/metadata_sorter.py
   ```
-
-* **CLI mode (specifying the target directory):**
+  You can also specify the source directory directly:
   ```bash
   python scripting/metadata_sorter.py "path/to/your/images_folder"
   ```
