@@ -97,8 +97,8 @@ Before copying, the script lists every media file and processes its metadata:
   Dimensions:    1536 x 2048 px
   Date Taken:    2024:11:11 11:25:26
   Camera Model:  Apple iPhone 12 mini
-  GPS Location:  52.520881, 13.320072
-  Proposed name:  241111_112526_Berlin.jpeg
+  GPS Location:  xx.xxxxxx, yy.yyyyyy
+  Proposed name:  241111_112526_London.jpeg
 ```
 After scanning, it prints a summary of the analyzed metadata:
 ```text
