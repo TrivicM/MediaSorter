@@ -17,6 +17,11 @@ dist/
 *.egg-info/
 .eggs/
 
+# Coverage
+.coverage
+.coverage.*
+htmlcov/
+
 # MediaSorter outputs
 Sorted/
 summary.json

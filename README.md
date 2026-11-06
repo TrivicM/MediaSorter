@@ -86,6 +86,22 @@ From the project root directory:
 
 ---
 
+## Running Tests
+
+To run the automated test suite with pytest:
+
+```bash
+uv run pytest
+```
+
+To run tests with test coverage reporting:
+
+```bash
+uv run pytest --cov=scripting --cov-report=term-missing
+```
+
+---
+
 ## Detailed Execution Flow
 
 ### Pass 1: Scan & Analysis Phase
