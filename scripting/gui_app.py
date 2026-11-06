@@ -782,9 +782,12 @@ def open_browser():
     time.sleep(1.0)
     webbrowser.open(f"http://127.0.0.1:{port}")
 
-if __name__ == "__main__":
+def main():
     # Start web browser in background thread
     threading.Thread(target=open_browser, daemon=True).start()
     
     # Run server
     uvicorn.run(app, host="127.0.0.1", port=port)
+
+if __name__ == "__main__":
+    main()
