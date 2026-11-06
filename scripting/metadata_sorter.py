@@ -1045,7 +1045,7 @@ def scan_directory(directory, results_dir=None, option=None, rename=None, duplic
     except Exception as e:
         print(f"\nError writing JSON summary: {e}")
 
-if __name__ == "__main__":
+def main():
     args = sys.argv[1:]
     
     # Remove any flags if passed for backwards compatibility
@@ -1084,3 +1084,6 @@ if __name__ == "__main__":
         results_dir = os.path.join(results_parent_dir, "Sorted")
             
     scan_directory(os.path.abspath(target_dir), results_dir=os.path.abspath(results_dir) if results_dir else None)
+
+if __name__ == "__main__":
+    main()

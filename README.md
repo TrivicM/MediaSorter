@@ -38,31 +38,28 @@ Sorting of images and videos, renaming, geolocation, copy, duplicate removal.
 
 ## Setup Instructions
 
-To run this project on a new computer:
+This project uses [`uv`](https://docs.astral.sh/uv/) for fast, deterministic Python environment and dependency management.
 
-1. **Create a virtual environment (optional but recommended):**
-   ```bash
-   python -m venv venv
-   ```
+### 1. Install `uv` (if not already installed)
 
-2. **Activate the virtual environment:**
-   * **Windows (PowerShell):**
-     ```powershell
-     .\venv\Scripts\Activate.ps1
-     ```
-   * **Windows (Command Prompt):**
-     ```cmd
-     .\venv\Scripts\activate.bat
-     ```
-   * **macOS / Linux:**
-     ```bash
-     source venv/bin/activate
-     ```
+* **Windows (PowerShell):**
+  ```powershell
+  winget install astral-sh.uv
+  # or: powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+  ```
+* **macOS / Linux:**
+  ```bash
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  ```
 
-3. **Install the dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
+### 2. Install Project Dependencies
+
+From the project root directory, synchronize the environment:
+
+```bash
+uv sync
+```
+This automatically sets up the `.venv` virtual environment and installs all dependencies specified in `pyproject.toml` using `uv.lock`.
 
 ## Usage
 
@@ -71,18 +68,20 @@ From the project root directory:
 * **Web GUI Dashboard (Recommended):**
   Start the FastAPI local web application:
   ```bash
-  python scripting/gui_app.py
+  uv run media-sorter-gui
   ```
-  This launches a browser window showing the interactive dashboard and map view.
+  *(Or `uv run python scripting/gui_app.py`)*  
+  This launches your default browser at `http://127.0.0.1:8000` showing the interactive dashboard and map view.
 
 * **CLI Mode (Terminal prompts):**
   Run the command-line sorter:
   ```bash
-  python scripting/metadata_sorter.py
+  uv run media-sorter
   ```
+  *(Or `uv run python scripting/metadata_sorter.py`)*  
   You can also specify the source directory directly:
   ```bash
-  python scripting/metadata_sorter.py "path/to/your/images_folder"
+  uv run media-sorter "path/to/your/images_folder"
   ```
 
 ---

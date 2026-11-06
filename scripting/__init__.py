@@ -1,0 +1,2 @@
+"""MediaSorter package."""
+
